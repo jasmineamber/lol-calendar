@@ -1,5 +1,5 @@
 import csv
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from urllib.parse import quote_plus
 
 import cloudscraper
@@ -84,6 +84,8 @@ def get_bo_info(tournament_name: str, scraper) -> str:
 
 
 def parse_csv_to_events(csv_text, bo_dict):
+    yesterday = (datetime.now(pytz.utc) - timedelta(days=1)).date()
+    yesterday_midnight = datetime.combine(yesterday, time.min, tzinfo=pytz.utc)
     lines = [line for line in csv_text.splitlines() if line.strip()]
     reader = csv.reader(lines)
     header = next(reader, None)
@@ -111,9 +113,9 @@ def parse_csv_to_events(csv_text, bo_dict):
             dt = dt.replace(hour=(dt.hour - 1) % 24)
             dt = pytz.utc.localize(dt)
             dt = dt + timedelta(hours=1)
-            end_dt = dt + timedelta(hours=1)
-            end_dt = pytz.utc.localize(end_dt)
-            end_dt = end_dt + timedelta(hours=1)
+            if dt < yesterday_midnight:
+                continue
+            end_dt = dt + timedelta(minutes=40)
         elif len(row) >= 11 and all(x.isdigit() for x in row[1:6]):
             start_year, start_month, start_day, start_hour, start_minute = (
                 int(row[1]),
@@ -133,6 +135,8 @@ def parse_csv_to_events(csv_text, bo_dict):
             end_dt = datetime(end_year, end_month, end_day, end_hour, end_minute)
             dt = pytz.utc.localize(dt)
             dt = dt + timedelta(hours=1)
+            if dt < yesterday_midnight:
+                continue
             end_dt = pytz.utc.localize(end_dt)
             end_dt = end_dt + timedelta(hours=1)
         elif len(row) >= 6 and all(x.isdigit() for x in row[1:6]):
@@ -146,9 +150,9 @@ def parse_csv_to_events(csv_text, bo_dict):
             dt = datetime(start_year, start_month, start_day, start_hour, start_minute)
             dt = pytz.utc.localize(dt)
             dt = dt + timedelta(hours=1)
-            end_dt = dt + timedelta(hours=1)
-            end_dt = pytz.utc.localize(end_dt)
-            end_dt = end_dt + timedelta(hours=1)
+            if dt < yesterday_midnight:
+                continue
+            end_dt = dt + timedelta(minutes=40)
         else:
             continue
 
@@ -162,11 +166,13 @@ def parse_csv_to_events(csv_text, bo_dict):
         else:
             summary = subject
 
+        if end_dt == dt:
+            end_dt = dt + timedelta(minutes=40)
+
         event = Event()
         event.add("summary", summary)
         event.add("dtstart", dt)
-        if end_dt != dt:
-            event.add("dtend", end_dt)
+        event.add("dtend", end_dt)
         event.add("description", parts[0] if len(parts) == 2 else subject)
         event.add("dtstamp", dt)
         event.add("created", dt)
