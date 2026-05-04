@@ -199,7 +199,11 @@ def generate_ics(events, filename):
 
 
 if __name__ == "__main__":
-    tournaments = ["LCK/2026 Season/Rounds 1-2", "LPL/2026 Season/Split 2"]
+    tournaments = [
+        "LCK/2026 Season/Rounds 1-2",
+        "LPL/2026 Season/Split 2",
+        "Esports World Cup 2026/Online Qualifiers/Korea",
+    ]
     scraper = cloudscraper.create_scraper(
         browser={"browser": "chrome", "platform": "windows", "mobile": False}
     )
