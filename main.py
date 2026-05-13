@@ -161,8 +161,9 @@ def parse_csv_to_events(csv_text, bo_dict):
         if len(parts) == 2:
             league = parts[0]
             teams = parts[1]
-            bo = bo_dict.get(league, "BO3")
-            summary = f"{teams} ({bo}) [{league}]"
+            # bo = bo_dict.get(league, "BO3")
+            # summary = f"{teams} ({bo}) [{league}]"
+            summary = f"{teams} [{league}]"
         else:
             summary = subject
 
@@ -218,8 +219,8 @@ if __name__ == "__main__":
         timeout=30,
     )
     bo_dict = {}
-    for t in tournaments:
-        bo_dict[t] = get_bo_info(t, scraper)
+    # for t in tournaments:
+    #     bo_dict[t] = get_bo_info(t, scraper)
     url = build_schedule_url(tournaments)
     csv_text = get_schedule_csv(url, scraper)
     # Save CSV for manual verification
