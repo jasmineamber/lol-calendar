@@ -1,14 +1,46 @@
 import csv
+import os
 import platform
 import shutil
+import socket
+import subprocess
+import tempfile
 from datetime import datetime, time, timedelta
-from subprocess import CalledProcessError, run
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import List, Optional
 from urllib.parse import quote_plus
+from urllib.request import urlretrieve
 
 import pytz
 from bs4 import BeautifulSoup
+from DrissionPage import ChromiumOptions, ChromiumPage
 from icalendar import Calendar, Event
+
+
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+BROWSER_PATHS = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+]
+BROWSER_EXECUTABLES = (
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "chrome",
+    "chrome.exe",
+    "msedge",
+    "msedge.exe",
+)
 
 
 def build_schedule_url(tournament_names: List[str]) -> str:
@@ -16,81 +48,105 @@ def build_schedule_url(tournament_names: List[str]) -> str:
     return f"https://lol.fandom.com/wiki/Special:RunQuery/MatchCalendarExport?MCE%5B1%5D={encoded_names}&_run="
 
 
-def find_or_install_curl() -> str:
-    curl_executable = shutil.which("curl")
-    if curl_executable:
-        return curl_executable
+def find_chromium_browser() -> Optional[str]:
+    for executable in BROWSER_EXECUTABLES:
+        browser_path = shutil.which(executable)
+        if browser_path:
+            return browser_path
 
+    for browser_path in BROWSER_PATHS:
+        if Path(browser_path).exists():
+            return browser_path
+
+    return None
+
+
+def run_install_command(command: List[str]) -> None:
+    if platform.system() == "Linux" and os.geteuid() != 0 and shutil.which("sudo"):
+        command = ["sudo"] + command
+    subprocess.run(command, check=True)
+
+
+def install_chromium_browser() -> Optional[str]:
     if platform.system() != "Linux":
-        raise RuntimeError(
-            "curl is not installed or not available on PATH. Install curl manually on Windows."
-        )
-
-    def run_command(cmd, **kwargs):
-        return run(cmd, capture_output=True, text=True, check=True, **kwargs)
+        return None
 
     if shutil.which("apt-get"):
-        run_command(["apt-get", "update"])
-        run_command(["apt-get", "install", "-y", "curl"])
-    elif shutil.which("apt"):
-        run_command(["apt", "update"])
-        run_command(["apt", "install", "-y", "curl"])
+        run_install_command(["apt-get", "update"])
+        with tempfile.NamedTemporaryFile(suffix=".deb", delete=False) as deb_file:
+            deb_path = deb_file.name
+        try:
+            urlretrieve(
+                "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb",
+                deb_path,
+            )
+            run_install_command(["apt-get", "install", "-y", deb_path])
+        finally:
+            Path(deb_path).unlink(missing_ok=True)
     elif shutil.which("dnf"):
-        run_command(["dnf", "install", "-y", "curl"])
+        run_install_command(
+            ["dnf", "install", "-y", "https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm"]
+        )
     elif shutil.which("yum"):
-        run_command(["yum", "install", "-y", "curl"])
+        run_install_command(
+            ["yum", "install", "-y", "https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm"]
+        )
     elif shutil.which("pacman"):
-        run_command(["pacman", "-Sy", "curl", "--noconfirm"])
+        run_install_command(["pacman", "-Sy", "--noconfirm", "chromium"])
     elif shutil.which("zypper"):
-        run_command(["zypper", "install", "-y", "curl"])
+        run_install_command(["zypper", "install", "-y", "chromium"])
     elif shutil.which("apk"):
-        run_command(["apk", "add", "curl"])
-    else:
-        raise RuntimeError("Unsupported Linux package manager. Install curl manually.")
+        run_install_command(["apk", "add", "chromium"])
 
-    curl_executable = shutil.which("curl")
-    if curl_executable:
-        return curl_executable
-    raise RuntimeError("curl installation completed, but curl is still not available.")
+    return find_chromium_browser()
 
 
-def curl_get(
-    url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 30
-) -> str:
-    curl_executable = find_or_install_curl()
+def ensure_chromium_browser() -> str:
+    browser_path = find_chromium_browser()
+    if browser_path:
+        return browser_path
 
-    cmd = [
-        curl_executable,
-        "--location",
-        "--silent",
-        "--show-error",
-        "--fail",
-        "--compressed",
-        url,
-    ]
-    if timeout is not None:
-        cmd += ["--max-time", str(timeout)]
-    if headers:
-        for name, value in headers.items():
-            cmd += ["-H", f"{name}: {value}"]
+    browser_path = install_chromium_browser()
+    if browser_path:
+        return browser_path
 
-    try:
-        result = run(cmd, capture_output=True, text=True, check=True)
-    except CalledProcessError as exc:
-        stderr = exc.stderr.strip() if exc.stderr else str(exc)
-        raise RuntimeError(f"curl request failed: {stderr}") from exc
+    raise RuntimeError(
+        "No Chrome/Chromium/Edge browser found, and automatic installation failed."
+    )
 
-    return result.stdout
+
+def find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def build_chromium_options(user_data_path: str) -> ChromiumOptions:
+    options = ChromiumOptions()
+    options.set_browser_path(ensure_chromium_browser())
+    options.headless(True)
+    options.set_local_port(find_free_port())
+    options.set_user_data_path(user_data_path)
+    options.set_user_agent(USER_AGENT)
+    options.set_argument("--disable-blink-features", "AutomationControlled")
+    options.set_argument("--disable-gpu")
+    options.set_argument("--no-sandbox")
+    return options
+
+
+def drission_get(url: str, timeout: int = 30) -> str:
+    with tempfile.TemporaryDirectory(prefix="lol-calendar-drission-") as user_data_dir:
+        page = ChromiumPage(build_chromium_options(user_data_dir))
+        try:
+            page.run_cdp("Emulation.setTimezoneOverride", timezoneId="UTC")
+            page.get(url, timeout=timeout)
+            return page.html
+        finally:
+            page.quit()
 
 
 def get_schedule_csv(url):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://lol.fandom.com/",
-    }
-    page_text = curl_get(url, headers=headers, timeout=30)
+    page_text = drission_get(url, timeout=30)
     soup = BeautifulSoup(page_text, "html.parser")
     text = soup.get_text()
     start = text.find("Subject,Start Date,Start Time")
@@ -118,13 +174,7 @@ def get_schedule_csv(url):
 
 def get_bo_info(tournament_name: str) -> str:
     url = f"https://lol.fandom.com/wiki/{tournament_name.replace(' ', '_')}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://lol.fandom.com/",
-    }
-    page_text = curl_get(url, headers=headers, timeout=30)
+    page_text = drission_get(url, timeout=30)
     soup = BeautifulSoup(page_text, "html.parser")
     format_section = soup.find("span", {"id": "Format"})
     if format_section:
