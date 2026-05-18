@@ -1,10 +1,11 @@
 import csv
+import platform
+import shutil
 from datetime import datetime, time, timedelta
+from subprocess import CalledProcessError, run
 from urllib.parse import quote_plus
 
-import cloudscraper
 import pytz
-import requests
 from bs4 import BeautifulSoup
 from icalendar import Calendar, Event
 
@@ -14,25 +15,80 @@ def build_schedule_url(tournament_names: list[str]) -> str:
     return f"https://lol.fandom.com/wiki/Special:RunQuery/MatchCalendarExport?MCE%5B1%5D={encoded_names}&_run="
 
 
-def get_schedule_csv(url, scraper):
+def find_or_install_curl() -> str:
+    curl_executable = shutil.which("curl")
+    if curl_executable:
+        return curl_executable
+
+    if platform.system() != "Linux":
+        raise RuntimeError(
+            "curl is not installed or not available on PATH. Install curl manually on Windows."
+        )
+
+    def run_command(cmd, **kwargs):
+        return run(cmd, capture_output=True, text=True, check=True, **kwargs)
+
+    if shutil.which("apt-get"):
+        run_command(["apt-get", "update"])
+        run_command(["apt-get", "install", "-y", "curl"])
+    elif shutil.which("apt"):
+        run_command(["apt", "update"])
+        run_command(["apt", "install", "-y", "curl"])
+    elif shutil.which("dnf"):
+        run_command(["dnf", "install", "-y", "curl"])
+    elif shutil.which("yum"):
+        run_command(["yum", "install", "-y", "curl"])
+    elif shutil.which("pacman"):
+        run_command(["pacman", "-Sy", "curl", "--noconfirm"])
+    elif shutil.which("zypper"):
+        run_command(["zypper", "install", "-y", "curl"])
+    elif shutil.which("apk"):
+        run_command(["apk", "add", "curl"])
+    else:
+        raise RuntimeError("Unsupported Linux package manager. Install curl manually.")
+
+    curl_executable = shutil.which("curl")
+    if curl_executable:
+        return curl_executable
+    raise RuntimeError("curl installation completed, but curl is still not available.")
+
+
+def curl_get(url: str, headers: dict | None = None, timeout: int = 30) -> str:
+    curl_executable = find_or_install_curl()
+
+    cmd = [
+        curl_executable,
+        "--location",
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--compressed",
+        url,
+    ]
+    if timeout is not None:
+        cmd += ["--max-time", str(timeout)]
+    if headers:
+        for name, value in headers.items():
+            cmd += ["-H", f"{name}: {value}"]
+
+    try:
+        result = run(cmd, capture_output=True, text=True, check=True)
+    except CalledProcessError as exc:
+        stderr = exc.stderr.strip() if exc.stderr else str(exc)
+        raise RuntimeError(f"curl request failed: {stderr}") from exc
+
+    return result.stdout
+
+
+def get_schedule_csv(url):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": "https://lol.fandom.com/",
     }
-    response = scraper.get(url, headers=headers, timeout=30)
-    try:
-        response.raise_for_status()
-    except requests.exceptions.HTTPError as exc:
-        if response.status_code == 403:
-            raise RuntimeError(
-                "Request blocked by Fandom (403). "
-                "cloudscraper could not bypass the protection."
-            ) from exc
-        raise
-
-    soup = BeautifulSoup(response.text, "html.parser")
+    page_text = curl_get(url, headers=headers, timeout=30)
+    soup = BeautifulSoup(page_text, "html.parser")
     text = soup.get_text()
     start = text.find("Subject,Start Date,Start Time")
     if start == -1:
@@ -57,20 +113,16 @@ def get_schedule_csv(url, scraper):
     return csv_text.strip()
 
 
-def get_bo_info(tournament_name: str, scraper) -> str:
+def get_bo_info(tournament_name: str) -> str:
     url = f"https://lol.fandom.com/wiki/{tournament_name.replace(' ', '_')}"
-    response = scraper.get(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Referer": "https://lol.fandom.com/",
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, "html.parser")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://lol.fandom.com/",
+    }
+    page_text = curl_get(url, headers=headers, timeout=30)
+    soup = BeautifulSoup(page_text, "html.parser")
     format_section = soup.find("span", {"id": "Format"})
     if format_section:
         ul = format_section.find_next("ul")
@@ -205,24 +257,11 @@ if __name__ == "__main__":
         "LPL/2026 Season/Split 2",
         "Esports World Cup 2026/Online Qualifiers/Korea",
     ]
-    scraper = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "windows", "mobile": False}
-    )
-    scraper.get(
-        "https://lol.fandom.com/",
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Referer": "https://lol.fandom.com/",
-        },
-        timeout=30,
-    )
     bo_dict = {}
     # for t in tournaments:
-    #     bo_dict[t] = get_bo_info(t, scraper)
+    #     bo_dict[t] = get_bo_info(t)
     url = build_schedule_url(tournaments)
-    csv_text = get_schedule_csv(url, scraper)
+    csv_text = get_schedule_csv(url)
     # Save CSV for manual verification
     with open("schedule.csv", "w", encoding="utf-8") as f:
         f.write(csv_text)
