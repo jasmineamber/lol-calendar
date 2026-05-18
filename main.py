@@ -3,6 +3,7 @@ import platform
 import shutil
 from datetime import datetime, time, timedelta
 from subprocess import CalledProcessError, run
+from typing import Dict, List, Optional
 from urllib.parse import quote_plus
 
 import pytz
@@ -10,7 +11,7 @@ from bs4 import BeautifulSoup
 from icalendar import Calendar, Event
 
 
-def build_schedule_url(tournament_names: list[str]) -> str:
+def build_schedule_url(tournament_names: List[str]) -> str:
     encoded_names = ",".join(quote_plus(name) for name in tournament_names)
     return f"https://lol.fandom.com/wiki/Special:RunQuery/MatchCalendarExport?MCE%5B1%5D={encoded_names}&_run="
 
@@ -53,7 +54,9 @@ def find_or_install_curl() -> str:
     raise RuntimeError("curl installation completed, but curl is still not available.")
 
 
-def curl_get(url: str, headers: dict | None = None, timeout: int = 30) -> str:
+def curl_get(
+    url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 30
+) -> str:
     curl_executable = find_or_install_curl()
 
     cmd = [
