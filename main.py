@@ -220,7 +220,7 @@ def parse_csv_to_events(csv_text, bo_dict):
             dt = dt + timedelta(hours=1)
             if dt < yesterday_midnight:
                 continue
-            end_dt = dt + timedelta(minutes=40)
+            end_dt = dt + timedelta(minutes=60)
         elif len(row) >= 11 and all(x.isdigit() for x in row[1:6]):
             start_year, start_month, start_day, start_hour, start_minute = (
                 int(row[1]),
