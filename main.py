@@ -257,7 +257,7 @@ def parse_csv_to_events(csv_text, bo_dict):
             dt = dt + timedelta(hours=1)
             if dt < yesterday_midnight:
                 continue
-            end_dt = dt + timedelta(minutes=40)
+            end_dt = dt + timedelta(minutes=60)
         else:
             continue
 
@@ -273,7 +273,7 @@ def parse_csv_to_events(csv_text, bo_dict):
             summary = subject
 
         if end_dt == dt:
-            end_dt = dt + timedelta(minutes=40)
+            end_dt = dt + timedelta(minutes=60)
 
         event = Event()
         event.add("summary", summary)
