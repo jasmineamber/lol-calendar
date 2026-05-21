@@ -306,8 +306,9 @@ def generate_ics(events, filename):
 
 if __name__ == "__main__":
     tournaments = [
-        "LCK/2026 Season/Rounds 1-2",
         "LPL/2026 Season/Split 2",
+        "Esports World Cup 2026/Online Qualifiers/China",
+        "LCK/2026 Season/Rounds 1-2",
         "Esports World Cup 2026/Online Qualifiers/Korea",
     ]
     bo_dict = {}
