@@ -214,12 +214,12 @@ def match_description(match: Dict) -> str:
 
 
 def estimated_end(start: datetime, match: Dict) -> datetime:
-    games = match.get("number_of_games") or 3
-    if games <= 1:
-        return start + timedelta(hours=2)
-    if games >= 5:
-        return start + timedelta(hours=5)
-    return start + timedelta(hours=3)
+    # games = match.get("number_of_games") or 3
+    # if games <= 1:
+    #     return start + timedelta(hours=2)
+    # if games >= 5:
+    #     return start + timedelta(hours=5)
+    return start + timedelta(hours=1)
 
 
 def match_to_event(match: Dict) -> Optional[Event]:
