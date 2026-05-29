@@ -1,323 +1,285 @@
-import csv
 import os
-import platform
-import shutil
-import socket
-import subprocess
-import tempfile
-from datetime import datetime, time, timedelta
-from pathlib import Path
-from typing import List, Optional
-from urllib.parse import quote_plus
-from urllib.request import urlretrieve
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Iterable, List, Optional
 
-import pytz
-from bs4 import BeautifulSoup
-from DrissionPage import ChromiumOptions, ChromiumPage
+import requests
 from icalendar import Calendar, Event
 
+PANDASCORE_BASE_URL = "https://api.pandascore.co"
+OUTPUT_FILENAME = "lck_schedule.ics"
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+# Keep the calendar focused on China and Korea. PandaScore does not expose a
+# single region filter on matches, so we filter the competition metadata.
+REGION_KEYWORDS = (
+    "china",
+    "chinese",
+    "demacia",
+    "nest",
+    "korea",
+    "korean",
+    "challengers korea",
 )
-BROWSER_PATHS = [
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-]
-BROWSER_EXECUTABLES = (
-    "google-chrome",
-    "google-chrome-stable",
-    "chromium",
-    "chromium-browser",
-    "chrome",
-    "chrome.exe",
-    "msedge",
-    "msedge.exe",
+REGION_PATTERNS = (
+    re.compile(r"(?<![a-z0-9])lpl(?![a-z0-9])"),
+    re.compile(r"(?<![a-z0-9])ldl(?![a-z0-9])"),
+    re.compile(r"(?<![a-z0-9])lck(?![a-z0-9])"),
+    re.compile(r"(?<![a-z0-9])lck cl(?![a-z0-9])"),
 )
 
 
-def build_schedule_url(tournament_names: List[str]) -> str:
-    encoded_names = ",".join(quote_plus(name) for name in tournament_names)
-    return f"https://lol.fandom.com/wiki/Special:RunQuery/MatchCalendarExport?MCE%5B1%5D={encoded_names}&_run="
+def get_pandascore_token() -> str:
+    token = os.getenv("PANDASCORE_TOKEN")
+    if not token:
+        raise RuntimeError(
+            "Missing PandaScore token. Set the PANDASCORE_TOKEN environment variable."
+        )
+    return token
 
 
-def find_chromium_browser() -> Optional[str]:
-    for executable in BROWSER_EXECUTABLES:
-        browser_path = shutil.which(executable)
-        if browser_path:
-            return browser_path
-
-    for browser_path in BROWSER_PATHS:
-        if Path(browser_path).exists():
-            return browser_path
-
-    return None
-
-
-def run_install_command(command: List[str]) -> None:
-    if platform.system() == "Linux" and os.geteuid() != 0 and shutil.which("sudo"):
-        command = ["sudo"] + command
-    subprocess.run(command, check=True)
-
-
-def install_chromium_browser() -> Optional[str]:
-    if platform.system() != "Linux":
+def parse_pandascore_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
         return None
 
-    if shutil.which("apt-get"):
-        run_install_command(["apt-get", "update"])
-        with tempfile.NamedTemporaryFile(suffix=".deb", delete=False) as deb_file:
-            deb_path = deb_file.name
-        try:
-            urlretrieve(
-                "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb",
-                deb_path,
-            )
-            run_install_command(["apt-get", "install", "-y", deb_path])
-        finally:
-            Path(deb_path).unlink(missing_ok=True)
-    elif shutil.which("dnf"):
-        run_install_command(
-            ["dnf", "install", "-y", "https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm"]
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def request_pandascore(path: str, token: str, params: Optional[Dict] = None):
+    response = requests.get(
+        f"{PANDASCORE_BASE_URL}{path}",
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+        params=params,
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_upcoming_lol_matches(token: str) -> List[Dict]:
+    matches: List[Dict] = []
+    page = 1
+    per_page = 100
+
+    while True:
+        batch = request_pandascore(
+            "/lol/matches/upcoming",
+            token,
+            params={
+                "page": page,
+                "per_page": per_page,
+                "sort": "scheduled_at",
+            },
         )
-    elif shutil.which("yum"):
-        run_install_command(
-            ["yum", "install", "-y", "https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm"]
-        )
-    elif shutil.which("pacman"):
-        run_install_command(["pacman", "-Sy", "--noconfirm", "chromium"])
-    elif shutil.which("zypper"):
-        run_install_command(["zypper", "install", "-y", "chromium"])
-    elif shutil.which("apk"):
-        run_install_command(["apk", "add", "chromium"])
+        if not batch:
+            break
 
-    return find_chromium_browser()
+        matches.extend(batch)
+        if len(batch) < per_page:
+            break
+
+        page += 1
+
+    return matches
 
 
-def ensure_chromium_browser() -> str:
-    browser_path = find_chromium_browser()
-    if browser_path:
-        return browser_path
-
-    browser_path = install_chromium_browser()
-    if browser_path:
-        return browser_path
-
-    raise RuntimeError(
-        "No Chrome/Chromium/Edge browser found, and automatic installation failed."
+def nested_name(match: Dict, key: str) -> str:
+    value = match.get(key) or {}
+    return " ".join(
+        str(value.get(field) or "")
+        for field in ("name", "full_name", "slug")
+        if value.get(field)
     )
 
 
-def find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+def competition_text(match: Dict) -> str:
+    return " ".join(
+        part
+        for part in (
+            nested_name(match, "league"),
+            nested_name(match, "serie"),
+            nested_name(match, "tournament"),
+        )
+        if part
+    ).lower()
 
 
-def build_chromium_options(user_data_path: str) -> ChromiumOptions:
-    options = ChromiumOptions()
-    options.set_browser_path(ensure_chromium_browser())
-    options.headless(True)
-    options.set_local_port(find_free_port())
-    options.set_user_data_path(user_data_path)
-    options.set_user_agent(USER_AGENT)
-    options.set_argument("--disable-blink-features", "AutomationControlled")
-    options.set_argument("--disable-gpu")
-    options.set_argument("--no-sandbox")
-    return options
+def is_china_or_korea_match(match: Dict) -> bool:
+    text = competition_text(match)
+    return any(keyword in text for keyword in REGION_KEYWORDS) or any(
+        pattern.search(text) for pattern in REGION_PATTERNS
+    )
 
 
-def drission_get(url: str, timeout: int = 30) -> str:
-    with tempfile.TemporaryDirectory(prefix="lol-calendar-drission-") as user_data_dir:
-        page = ChromiumPage(build_chromium_options(user_data_dir))
-        try:
-            page.run_cdp("Emulation.setTimezoneOverride", timezoneId="UTC")
-            page.get(url, timeout=timeout)
-            return page.html
-        finally:
-            page.quit()
+def opponent_label(opponent_entry: Dict) -> str:
+    opponent = opponent_entry.get("opponent") or {}
+    return opponent.get("acronym") or opponent.get("name") or "TBD"
 
 
-def get_schedule_csv(url):
-    page_text = drission_get(url, timeout=30)
-    soup = BeautifulSoup(page_text, "html.parser")
-    text = soup.get_text()
-    start = text.find("Subject,Start Date,Start Time")
-    if start == -1:
-        raise ValueError("CSV not found in page")
-    csv_text = text[start:]
+def match_teams(match: Dict) -> List[str]:
+    return [opponent_label(entry) for entry in match.get("opponents", [])]
 
-    terminators = [
-        "## Additional query",
-        "Additional query",
-        "Fandom Apps",
-        "Explore Properties",
-        "Local Sitemap",
+
+def display_name(value: Optional[Dict]) -> Optional[str]:
+    if not value:
+        return None
+
+    return value.get("full_name") or value.get("name")
+
+
+def competition_label(match: Dict) -> str:
+    label_parts = []
+    seen = set()
+
+    for key in ("league", "serie", "tournament"):
+        name = display_name(match.get(key))
+        if not name:
+            continue
+
+        normalized = name.lower()
+        if normalized in seen:
+            continue
+
+        label_parts.append(name)
+        seen.add(normalized)
+
+    return " ".join(label_parts)
+
+
+def format_label(match: Dict) -> Optional[str]:
+    games = match.get("number_of_games")
+    if not games:
+        return None
+
+    return f"BO{games}"
+
+
+def matchup_label(match: Dict) -> str:
+    name = match.get("name")
+    teams = match_teams(match)
+    has_placeholder = any(team == "TBD" for team in teams)
+
+    if name and (has_placeholder or len(teams) < 2):
+        return name
+
+    if len(teams) >= 2:
+        return " vs ".join(teams)
+
+    return "TBD"
+
+
+def match_summary(match: Dict) -> str:
+    matchup = matchup_label(match)
+    bo = format_label(match)
+    if bo:
+        matchup = f"{matchup} ({bo})"
+
+    label = competition_label(match)
+    return f"{matchup} [{label}]" if label else matchup
+
+
+def match_description(match: Dict) -> str:
+    lines = []
+
+    for label, key in (
+        ("League", "league"),
+        ("Serie", "serie"),
+        ("Tournament", "tournament"),
+    ):
+        name = display_name(match.get(key))
+        if name:
+            lines.append(f"{label}: {name}")
+
+    bo = format_label(match)
+    if bo:
+        lines.append(f"Format: {bo}")
+    if match.get("status"):
+        lines.append(f"Status: {match['status']}")
+    if match.get("rescheduled"):
+        lines.append("Rescheduled: yes")
+
+    streams = [
+        stream.get("raw_url")
+        for stream in match.get("streams_list", [])
+        if stream.get("raw_url")
     ]
-    lowest_end = None
-    for terminator in terminators:
-        end = csv_text.find(terminator)
-        if end != -1 and (lowest_end is None or end < lowest_end):
-            lowest_end = end
-    if lowest_end is not None:
-        csv_text = csv_text[:lowest_end]
+    if match.get("official_stream_url"):
+        streams.insert(0, match["official_stream_url"])
+    if streams:
+        lines.append(f"Stream: {streams[0]}")
 
-    return csv_text.strip()
+    return "\n".join(lines)
 
 
-def get_bo_info(tournament_name: str) -> str:
-    url = f"https://lol.fandom.com/wiki/{tournament_name.replace(' ', '_')}"
-    page_text = drission_get(url, timeout=30)
-    soup = BeautifulSoup(page_text, "html.parser")
-    format_section = soup.find("span", {"id": "Format"})
-    if format_section:
-        ul = format_section.find_next("ul")
-        if ul:
-            text = ul.get_text().lower()
-            if "best of three" in text:
-                return "BO3"
-            elif "best of five" in text:
-                return "BO5"
-    return "BO3"  # default
+def estimated_end(start: datetime, match: Dict) -> datetime:
+    games = match.get("number_of_games") or 3
+    if games <= 1:
+        return start + timedelta(hours=2)
+    if games >= 5:
+        return start + timedelta(hours=5)
+    return start + timedelta(hours=3)
 
 
-def parse_csv_to_events(csv_text, bo_dict):
-    yesterday = (datetime.now(pytz.utc) - timedelta(days=1)).date()
-    yesterday_midnight = datetime.combine(yesterday, time.min, tzinfo=pytz.utc)
-    lines = [line for line in csv_text.splitlines() if line.strip()]
-    reader = csv.reader(lines)
-    header = next(reader, None)
-    if header is None:
-        raise ValueError("CSV text is empty")
+def match_to_event(match: Dict) -> Optional[Event]:
+    start = parse_pandascore_datetime(
+        match.get("scheduled_at") or match.get("begin_at")
+    )
+    if not start:
+        return None
 
+    if start.year != datetime.now(timezone.utc).year:
+        return None
+
+    end = parse_pandascore_datetime(match.get("end_at")) or estimated_end(start, match)
+    now = datetime.now(timezone.utc)
+
+    event = Event()
+    event.add("summary", match_summary(match))
+    event.add("dtstart", start)
+    event.add("dtend", end)
+    event.add("description", match_description(match))
+    event.add("dtstamp", now)
+    event.add("created", now)
+    event.add("last-modified", now)
+    event.add("status", "CONFIRMED")
+    event.add("transp", "OPAQUE")
+    event.add("sequence", 0)
+    event.add("uid", f"pandascore-lol-match-{match['id']}@lol-calendar")
+    return event
+
+
+def matches_to_events(matches: Iterable[Dict]) -> List[Event]:
     events = []
-
-    for row in reader:
-        if not row:
-            continue
-        if len(row) == 1 and row[0].strip() in {
-            "Additional query",
-            "Fandom Apps",
-            "Explore Properties",
-            "Local Sitemap",
-        }:
-            break
-
-        subject = row[0]
-
-        if len(row) == 3:
-            date_str, time_str = row[1], row[2]
-            dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-            dt = dt.replace(hour=(dt.hour - 1) % 24)
-            dt = pytz.utc.localize(dt)
-            dt = dt + timedelta(hours=1)
-            if dt < yesterday_midnight:
-                continue
-            end_dt = dt + timedelta(minutes=60)
-        elif len(row) >= 11 and all(x.isdigit() for x in row[1:6]):
-            start_year, start_month, start_day, start_hour, start_minute = (
-                int(row[1]),
-                int(row[2]),
-                int(row[3]),
-                (int(row[4]) - 1) % 24,
-                int(row[5]),
-            )
-            end_year, end_month, end_day, end_hour, end_minute = (
-                int(row[6]),
-                int(row[7]),
-                int(row[8]),
-                (int(row[9]) - 1) % 24,
-                int(row[10]),
-            )
-            dt = datetime(start_year, start_month, start_day, start_hour, start_minute)
-            end_dt = datetime(end_year, end_month, end_day, end_hour, end_minute)
-            dt = pytz.utc.localize(dt)
-            dt = dt + timedelta(hours=1)
-            if dt < yesterday_midnight:
-                continue
-            end_dt = pytz.utc.localize(end_dt)
-            end_dt = end_dt + timedelta(hours=1)
-        elif len(row) >= 6 and all(x.isdigit() for x in row[1:6]):
-            start_year, start_month, start_day, start_hour, start_minute = (
-                int(row[1]),
-                int(row[2]),
-                int(row[3]),
-                (int(row[4]) - 1) % 24,
-                int(row[5]),
-            )
-            dt = datetime(start_year, start_month, start_day, start_hour, start_minute)
-            dt = pytz.utc.localize(dt)
-            dt = dt + timedelta(hours=1)
-            if dt < yesterday_midnight:
-                continue
-            end_dt = dt + timedelta(minutes=60)
-        else:
+    for match in matches:
+        if not is_china_or_korea_match(match):
             continue
 
-        # Parse subject to reformat summary
-        parts = subject.split(" - ")
-        if len(parts) == 2:
-            league = parts[0]
-            teams = parts[1]
-            # bo = bo_dict.get(league, "BO3")
-            # summary = f"{teams} ({bo}) [{league}]"
-            summary = f"{teams} [{league}]"
-        else:
-            summary = subject
-
-        if end_dt == dt:
-            end_dt = dt + timedelta(minutes=60)
-
-        event = Event()
-        event.add("summary", summary)
-        event.add("dtstart", dt)
-        event.add("dtend", end_dt)
-        event.add("description", parts[0] if len(parts) == 2 else subject)
-        event.add("dtstamp", dt)
-        event.add("created", dt)
-        event.add("last-modified", dt)
-        event.add("status", "CONFIRMED")
-        event.add("transp", "OPAQUE")
-        event.add("sequence", 0)
-        event.add("uid", f"{dt.strftime('%Y%m%dT%H%M%SZ')}@example.com")
-        events.append(event)
+        event = match_to_event(match)
+        if event:
+            events.append(event)
 
     return events
 
 
-def generate_ics(events, filename):
+def generate_ics(events: Iterable[Event], filename: str) -> None:
     cal = Calendar()
-    cal.add("prodid", "-//My calendar//example.com//")
+    cal.add("prodid", "-//LoL China Korea calendar//lol-calendar//")
     cal.add("version", "2.0")
     cal.add("calscale", "GREGORIAN")
     cal.add("method", "PUBLISH")
+
     for event in events:
         cal.add_component(event)
+
     with open(filename, "wb") as f:
         f.write(cal.to_ical())
 
 
 if __name__ == "__main__":
-    tournaments = [
-        "LPL/2026 Season/Split 2",
-        "Esports World Cup 2026/Online Qualifiers/China",
-        "LCK/2026 Season/Rounds 1-2",
-        "Esports World Cup 2026/Online Qualifiers/Korea",
-    ]
-    bo_dict = {}
-    # for t in tournaments:
-    #     bo_dict[t] = get_bo_info(t)
-    url = build_schedule_url(tournaments)
-    csv_text = get_schedule_csv(url)
-    # Save CSV for manual verification
-    with open("schedule.csv", "w", encoding="utf-8") as f:
-        f.write(csv_text)
-    events = parse_csv_to_events(csv_text, bo_dict)
-    generate_ics(events, "lck_schedule.ics")
+    token = get_pandascore_token()
+    all_matches = fetch_upcoming_lol_matches(token)
+    events = matches_to_events(all_matches)
+    generate_ics(events, OUTPUT_FILENAME)
+    print(f"Wrote {len(events)} China/Korea LoL matches to {OUTPUT_FILENAME}.")

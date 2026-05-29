@@ -27,6 +27,8 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run script to update schedule
+        env:
+          PANDASCORE_TOKEN: ${{ secrets.PANDASCORE_TOKEN }}
         run: python main.py
 
       - name: Commit and push changes
