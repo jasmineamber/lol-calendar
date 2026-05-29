@@ -1,6 +1,2 @@
 requests
-beautifulsoup4
 icalendar
-pytz
-cloudscraper
-DrissionPage
