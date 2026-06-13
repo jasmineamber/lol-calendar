@@ -224,7 +224,7 @@ def estimated_end(start: datetime, match: Dict) -> datetime:
 
 def match_to_event(match: Dict) -> Optional[Event]:
     start = parse_pandascore_datetime(
-        match.get("scheduled_at") or match.get("begin_at")
+        match.get("begin_at") or match.get("scheduled_at")
     )
     if not start:
         return None
