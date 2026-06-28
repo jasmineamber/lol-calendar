@@ -19,6 +19,7 @@ REGION_KEYWORDS = (
     "korea",
     "korean",
     "challengers korea",
+    "league-of-legends-mid-invitational",
 )
 REGION_PATTERNS = (
     re.compile(r"(?<![a-z0-9])lpl(?![a-z0-9])"),
