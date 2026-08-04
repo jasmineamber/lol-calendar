@@ -1,5 +1,4 @@
 import os
-import re
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 
@@ -9,25 +8,7 @@ from icalendar import Calendar, Event
 PANDASCORE_BASE_URL = "https://api.pandascore.co"
 OUTPUT_FILENAME = "lck_schedule.ics"
 
-# Keep the calendar focused on China and Korea. PandaScore does not expose a
-# single region filter on matches, so we filter the competition metadata.
-REGION_KEYWORDS = (
-    "china",
-    "chinese",
-    "demacia",
-    "nest",
-    "korea",
-    "korean",
-    "challengers korea",
-    "league-of-legends-mid-invitational",
-    "league-of-legends-esports-world-cup-2026",
-)
-REGION_PATTERNS = (
-    re.compile(r"(?<![a-z0-9])lpl(?![a-z0-9])"),
-    re.compile(r"(?<![a-z0-9])ldl(?![a-z0-9])"),
-    re.compile(r"(?<![a-z0-9])lck(?![a-z0-9])"),
-    re.compile(r"(?<![a-z0-9])lck cl(?![a-z0-9])"),
-)
+TARGET_LEAGUE_NAMES = {"LPL", "LCK", "KeSPA Cup"}
 
 
 def get_pandascore_token() -> str:
@@ -87,32 +68,9 @@ def fetch_upcoming_lol_matches(token: str) -> list[dict]:
     return matches
 
 
-def nested_name(match: dict, key: str) -> str:
-    value = match.get(key) or {}
-    return " ".join(
-        str(value.get(field) or "")
-        for field in ("name", "full_name", "slug")
-        if value.get(field)
-    )
-
-
-def competition_text(match: dict) -> str:
-    return " ".join(
-        part
-        for part in (
-            nested_name(match, "league"),
-            nested_name(match, "serie"),
-            nested_name(match, "tournament"),
-        )
-        if part
-    ).lower()
-
-
-def is_china_or_korea_match(match: dict) -> bool:
-    text = competition_text(match)
-    return any(keyword in text for keyword in REGION_KEYWORDS) or any(
-        pattern.search(text) for pattern in REGION_PATTERNS
-    )
+def is_target_league_match(match: dict) -> bool:
+    league = match.get("league") or {}
+    return league.get("name") in TARGET_LEAGUE_NAMES
 
 
 def opponent_label(opponent_entry: dict) -> str:
@@ -255,7 +213,7 @@ def match_to_event(match: dict) -> Event | None:
 def matches_to_events(matches: Iterable[dict]) -> list[Event]:
     events = []
     for match in matches:
-        if not is_china_or_korea_match(match):
+        if not is_target_league_match(match):
             continue
 
         event = match_to_event(match)
@@ -284,4 +242,4 @@ if __name__ == "__main__":
     all_matches = fetch_upcoming_lol_matches(token)
     events = matches_to_events(all_matches)
     generate_ics(events, OUTPUT_FILENAME)
-    print(f"Wrote {len(events)} China/Korea LoL matches to {OUTPUT_FILENAME}.")
+    print(f"Wrote {len(events)} target-league LoL matches to {OUTPUT_FILENAME}.")
