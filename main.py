@@ -1,7 +1,7 @@
 import os
 import re
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Iterable, List, Optional
 
 import requests
 from icalendar import Calendar, Event
@@ -39,14 +39,14 @@ def get_pandascore_token() -> str:
     return token
 
 
-def parse_pandascore_datetime(value: Optional[str]) -> Optional[datetime]:
+def parse_pandascore_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
 
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
-def request_pandascore(path: str, token: str, params: Optional[Dict] = None):
+def request_pandascore(path: str, token: str, params: dict | None = None):
     response = requests.get(
         f"{PANDASCORE_BASE_URL}{path}",
         headers={
@@ -60,8 +60,8 @@ def request_pandascore(path: str, token: str, params: Optional[Dict] = None):
     return response.json()
 
 
-def fetch_upcoming_lol_matches(token: str) -> List[Dict]:
-    matches: List[Dict] = []
+def fetch_upcoming_lol_matches(token: str) -> list[dict]:
+    matches: list[dict] = []
     page = 1
     per_page = 100
 
@@ -87,7 +87,7 @@ def fetch_upcoming_lol_matches(token: str) -> List[Dict]:
     return matches
 
 
-def nested_name(match: Dict, key: str) -> str:
+def nested_name(match: dict, key: str) -> str:
     value = match.get(key) or {}
     return " ".join(
         str(value.get(field) or "")
@@ -96,7 +96,7 @@ def nested_name(match: Dict, key: str) -> str:
     )
 
 
-def competition_text(match: Dict) -> str:
+def competition_text(match: dict) -> str:
     return " ".join(
         part
         for part in (
@@ -108,30 +108,30 @@ def competition_text(match: Dict) -> str:
     ).lower()
 
 
-def is_china_or_korea_match(match: Dict) -> bool:
+def is_china_or_korea_match(match: dict) -> bool:
     text = competition_text(match)
     return any(keyword in text for keyword in REGION_KEYWORDS) or any(
         pattern.search(text) for pattern in REGION_PATTERNS
     )
 
 
-def opponent_label(opponent_entry: Dict) -> str:
+def opponent_label(opponent_entry: dict) -> str:
     opponent = opponent_entry.get("opponent") or {}
     return opponent.get("acronym") or opponent.get("name") or "TBD"
 
 
-def match_teams(match: Dict) -> List[str]:
+def match_teams(match: dict) -> list[str]:
     return [opponent_label(entry) for entry in match.get("opponents", [])]
 
 
-def display_name(value: Optional[Dict]) -> Optional[str]:
+def display_name(value: dict | None) -> str | None:
     if not value:
         return None
 
     return value.get("full_name") or value.get("name")
 
 
-def competition_label(match: Dict) -> str:
+def competition_label(match: dict) -> str:
     label_parts = []
     seen = set()
 
@@ -150,7 +150,7 @@ def competition_label(match: Dict) -> str:
     return " ".join(label_parts)
 
 
-def format_label(match: Dict) -> Optional[str]:
+def format_label(match: dict) -> str | None:
     games = match.get("number_of_games")
     if not games:
         return None
@@ -158,7 +158,7 @@ def format_label(match: Dict) -> Optional[str]:
     return f"BO{games}"
 
 
-def matchup_label(match: Dict) -> str:
+def matchup_label(match: dict) -> str:
     name = match.get("name")
     teams = match_teams(match)
     has_placeholder = any(team == "TBD" for team in teams)
@@ -172,7 +172,7 @@ def matchup_label(match: Dict) -> str:
     return "TBD"
 
 
-def match_summary(match: Dict) -> str:
+def match_summary(match: dict) -> str:
     matchup = matchup_label(match)
     bo = format_label(match)
     if bo:
@@ -182,7 +182,7 @@ def match_summary(match: Dict) -> str:
     return f"{matchup} [{label}]" if label else matchup
 
 
-def match_description(match: Dict) -> str:
+def match_description(match: dict) -> str:
     lines = []
 
     for label, key in (
@@ -215,7 +215,7 @@ def match_description(match: Dict) -> str:
     return "\n".join(lines)
 
 
-def estimated_end(start: datetime, match: Dict) -> datetime:
+def estimated_end(start: datetime, match: dict) -> datetime:
     # games = match.get("number_of_games") or 3
     # if games <= 1:
     #     return start + timedelta(hours=2)
@@ -224,7 +224,7 @@ def estimated_end(start: datetime, match: Dict) -> datetime:
     return start + timedelta(hours=1)
 
 
-def match_to_event(match: Dict) -> Optional[Event]:
+def match_to_event(match: dict) -> Event | None:
     start = parse_pandascore_datetime(
         match.get("begin_at") or match.get("scheduled_at")
     )
@@ -252,7 +252,7 @@ def match_to_event(match: Dict) -> Optional[Event]:
     return event
 
 
-def matches_to_events(matches: Iterable[Dict]) -> List[Event]:
+def matches_to_events(matches: Iterable[dict]) -> list[Event]:
     events = []
     for match in matches:
         if not is_china_or_korea_match(match):
