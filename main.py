@@ -151,6 +151,9 @@ def match_description(match: dict) -> str:
         lines.append(f"Format: {bo}")
     if match.get("status"):
         lines.append(f"Status: {match['status']}")
+    winner = match.get("winner") or {}
+    if winner.get("acronym"):
+        lines.append(f"Winner: {winner['acronym']}")
     if match.get("rescheduled"):
         lines.append("Rescheduled: yes")
 
