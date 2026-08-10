@@ -41,31 +41,25 @@ def request_pandascore(path: str, token: str, params: dict | None = None):
     return response.json()
 
 
-def fetch_upcoming_lol_matches(token: str) -> list[dict]:
-    matches: list[dict] = []
-    page = 1
-    per_page = 100
+def fetch_lol_matches(path: str, token: str, params: dict | None = None) -> list[dict]:
+    default_params = {"page": 1, "per_page": 100}
+    if params:
+        default_params.update(params)
+    return request_pandascore(path, token, params=default_params)
 
-    while True:
-        batch = request_pandascore(
-            "/lol/matches/upcoming",
-            token,
-            params={
-                "page": page,
-                "per_page": per_page,
-                "sort": "scheduled_at",
-            },
-        )
-        if not batch:
-            break
 
-        matches.extend(batch)
-        if len(batch) < per_page:
-            break
+def fetch_all_lol_matches(token: str) -> list[dict]:
+    upcoming = fetch_lol_matches("/lol/matches/upcoming", token)
+    running = fetch_lol_matches("/lol/matches/running", token)
+    past = fetch_lol_matches("/lol/matches/past", token, params={"per_page": 20})
 
-        page += 1
+    seen: dict[int, dict] = {}
+    for match in upcoming + running + past:
+        mid = match["id"]
+        if mid not in seen:
+            seen[mid] = match
 
-    return matches
+    return list(seen.values())
 
 
 def is_target_league_match(match: dict) -> bool:
@@ -239,7 +233,7 @@ def generate_ics(events: Iterable[Event], filename: str) -> None:
 
 if __name__ == "__main__":
     token = get_pandascore_token()
-    all_matches = fetch_upcoming_lol_matches(token)
+    all_matches = fetch_all_lol_matches(token)
     events = matches_to_events(all_matches)
     generate_ics(events, OUTPUT_FILENAME)
     print(f"Wrote {len(events)} target-league LoL matches to {OUTPUT_FILENAME}.")
