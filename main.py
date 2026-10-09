@@ -8,7 +8,7 @@ from icalendar import Calendar, Event
 PANDASCORE_BASE_URL = "https://api.pandascore.co"
 OUTPUT_FILENAME = "lck_schedule.ics"
 
-TARGET_LEAGUE_NAMES = {"LPL", "LCK", "KeSPA Cup"}
+TARGET_LEAGUE_NAMES = {"LPL", "LCK", "KeSPA Cup", "Worlds"}
 
 
 def get_pandascore_token() -> str:
