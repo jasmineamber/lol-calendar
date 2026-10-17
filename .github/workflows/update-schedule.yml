@@ -2,7 +2,7 @@ name: Update LCK Schedule
 
 on:
   schedule:
-    - cron: "0 16 * * *" # Run daily at 4:00 PM UTC
+    - cron: "0 5,16 * * *" # Run daily at 4:00 PM UTC
   workflow_dispatch: # Allow manual trigger
 
 permissions:
